@@ -23,8 +23,8 @@ def distance_3d(p1, p2, h_uav):
 
 def P_LoS_3GPP(d_2d, h_uav):
     theta = np.degrees(np.arctan2(h_uav, d_2d))
-    a = 9.61
-    b = 0.16
+    a = 12
+    b = 0.135
     return 1 / (1 + a * np.exp(-b * (theta - a)))
 
 

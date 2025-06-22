@@ -2,7 +2,7 @@ import numpy as np
 
 # Simulation Parameters
 
-BANDWIDTH_WIRELESS_CHANNEL_B = 1e6  # Hz
+BANDWIDTH_WIRELESS_CHANNEL_B = 1  # MHz
 BLADE_PROFILE_POWER_PB = 80  # w
 INDUCED_POWER_PI = 90  # w
 TIP_SPEED_BLADE_UT = 12  # m/s
@@ -29,7 +29,7 @@ FREQUENCY_CARRIER_F = 2e9
 
 NUM_UES_K = 100
 NUM_UAVS_N = 10
-NUM_TIME_SLOTS_T = 100000
+NUM_TIME_SLOTS_T = 10
 RECTANGULAR_AREA_SIDE_LENGTH = 2000  # m (ratio, implies side length of 2000m x 2000m if square, or one side is 2000m)
 UE_MOBILITY_ANGLE_CONSTRAINT = [0, 2 * np.pi]  # radians, [0, 2pi]
 UE_MOBILITY_VELOCITY_CONSTRAINT = [0, 1]  # m/s

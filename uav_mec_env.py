@@ -26,7 +26,7 @@ class UAVMECEnv(gym.Env):
         self.max_latency_constraint = max_latency_constraint  # s
         self.max_computation_capacity_uav = max_computation_capacity_uav  # CPU cycles
         self.total_cpu_cycles = total_cpu_cycles  # CPU cycles
-        self.total_data_size = total_data_size  # Kbits
+        self.total_data_size = total_data_size * 1e3  # Kbits => bits
 
         # State: [UE offload target, UE transmit power level, total power]
         self.observation_space = spaces.Box(
@@ -75,6 +75,22 @@ class UAVMECEnv(gym.Env):
         )  # Count of UEs connected to each UAV
 
         self.uav_velocity = UAV_VELOCITY_V  # m/s
+
+        self.propulsion_power_uav = (
+            BLADE_PROFILE_POWER_PB
+            * (1 + (3 * UAV_VELOCITY_V**2) / TIP_SPEED_BLADE_UT**2)
+            + INDUCED_POWER_PI
+            * (
+                (1 + UAV_VELOCITY_V**4 / (4 * MEAN_INDUCED_SPEED_V0**4)) ** 0.5
+                - UAV_VELOCITY_V**2 / (2 * MEAN_INDUCED_SPEED_V0**2)
+            )
+            ** 0.5
+            + 0.5
+            * FUSELAGE_DRAG_PROPORTION_F0
+            * AIR_DENSITY_RHO
+            * ROTOR_DISC_AREA_A
+            * UAV_VELOCITY_V**3
+        )  # (18)
 
     def _init_uav_positions(self):
         angle_step = 2 * np.pi / self.num_uavs
@@ -163,7 +179,6 @@ class UAVMECEnv(gym.Env):
         sum_computation_power_uavs = 0
         sum_local_computation_power = 0
         sum_propulsion_power_uavs = 0
-
         sum_time_processing_when_offload = 0
         sum_time_processing_when_local = 0
 
@@ -179,7 +194,7 @@ class UAVMECEnv(gym.Env):
                     self.cpu_cycles[ue_idx] / self.ue_computation_capacity[ue_idx]
                 )  # (14)
 
-                KAPPA = 1e-27  # cac tham so nay chua tim ra, trong bai bao
+                KAPPA = 1e-23  # cac tham so nay chua tim ra, trong bai bao
                 NU = 3
                 local_computation_power = KAPPA * (
                     self.ue_computation_capacity[ue_idx] ** NU
@@ -197,10 +212,11 @@ class UAVMECEnv(gym.Env):
                     power_level,
                 )
                 transmission_power = (
-                    power_level
-                    / NUMBER_TRANSMISSION_POWER_LEVELS_LP
-                    * dbm_to_watt(MAXIMAL_TRANSMISSION_POWER_UES_P_TR_MAX)
+                    power_level / NUMBER_TRANSMISSION_POWER_LEVELS_LP
+                ) * dbm_to_watt(
+                    MAXIMAL_TRANSMISSION_POWER_UES_P_TR_MAX
                 )  # lien quan o cho Action
+
                 transmission_power_ues[ue_idx] = transmission_power
                 sum_transmission_power += transmission_power  # (9)
 
@@ -241,30 +257,22 @@ class UAVMECEnv(gym.Env):
                 * (overall_computation_resource_allocated_of_UAVs[uav_idx]) ** OMEGA
             )  # (10)
 
-            sum_propulsion_power_uavs += (
-                BLADE_PROFILE_POWER_PB
-                * (1 + (3 * UAV_VELOCITY_V**2) / TIP_SPEED_BLADE_UT**2)
-                + INDUCED_POWER_PI
-                * (
-                    (1 + UAV_VELOCITY_V**4 / (4 * MEAN_INDUCED_SPEED_V0**4)) ** 0.5
-                    - UAV_VELOCITY_V**2 / (2 * MEAN_INDUCED_SPEED_V0**2)
-                )
-                ** 0.5
-                + 0.5
-                * FUSELAGE_DRAG_PROPORTION_F0
-                * AIR_DENSITY_RHO
-                * ROTOR_DISC_AREA_A
-                * UAV_VELOCITY_V**3
-            )  # (18)
+            sum_propulsion_power_uavs += self.propulsion_power_uav  # (19)
 
         P_TR_t = transmission_power_ues
-        P_UE_t = sum_local_computation_power
-        P_UAV_t = (
-            sum_transmission_power
-            + sum_computation_power_uavs
-            + sum_propulsion_power_uavs
-        )
+        P_UE_t = sum_local_computation_power + sum_transmission_power
+        P_UAV_t = sum_computation_power_uavs + sum_propulsion_power_uavs
         P_SYS_t = P_UE_t + P_UAV_t  # (20)
+
+        print(
+            f"""
+            sum_transmission_power: {sum_transmission_power} W,
+            sum_local_computation_power: {sum_local_computation_power} W,
+            sum_computation_power_uavs: {sum_computation_power_uavs} W,
+            sum_propulsion_power_uavs: {sum_propulsion_power_uavs} W,
+            count_violations: {count_violations},
+            P_SYS_t: {P_SYS_t} W"""
+        )
 
         reward = 1 / (
             POWER_CONSUMPTION_WEIGHT_UAVS_ETA * P_UAV_t
@@ -319,9 +327,9 @@ class UAVMECEnv(gym.Env):
 
     def render(self, file_name=None):
         if not file_name:
-            print(f"Rendering at time slot {self.time_slot}")
-            print(f"Overall transmission power: {self.overall_transmission_power}")
-            print(f"Overall power consumption: {self.overall_power_consumption_system}")
+            print(
+                f"Average system power consumption: {self.overall_power_consumption_system / self.time_slot:.2f} W"
+            )
 
     def close(self):
         pass

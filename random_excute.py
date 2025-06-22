@@ -3,7 +3,7 @@ import numpy as np
 
 
 for num_ues in range(20, 21, 20):
-    env = UAVMECEnv(num_ues=num_ues)
+    env = UAVMECEnv(num_uavs=4)
     env.reset()
     done = False
 
