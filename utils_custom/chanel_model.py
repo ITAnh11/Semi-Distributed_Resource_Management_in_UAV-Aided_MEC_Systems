@@ -1,15 +1,29 @@
 import numpy as np
 from parameters import *
 
-# cho nay tim cung khong chac de chatgpt tu gen ra
+# RMa-AV: Mô phỏng các khu vực nông thôn, nơi có mật độ dân cư và tòa nhà thấp, chủ yếu là đồng ruộng, rừng cây, hoặc các khu dân cư thưa thớt.
+# UMa-AV: Khu vực đô thị vĩ mô (rộng lớn), với các tòa nhà cao tầng nhưng không quá dày đặc.
+# UMi-AV: Khu vực đô thị vi mô (nhỏ, đông đúc), với các tòa nhà cao tầng và mật độ xây dựng dày đặc.
+enum_type_uac = {
+    "RMa-AV": 0,
+    "UMa-AV": 1,
+    "UMi-AV": 2,
+}
+
+carrier_frequency = [0.7, 2, 2]  # GHz, corresponding to RMa-AV, UMa-AV, UMi-AV
+
+# [dB] (fc is in GHz and distance is in meters)
 
 
-def dbm_to_watt(dbm):
-    return 10 ** ((dbm - 30) / 10)
+def convert_dBm_to_W(dBm):
+    """Convert power from dBm to Watts."""
+    return 10 ** ((dBm - 30) / 10)
 
 
 def distance_2d(p1, p2):
-    return np.linalg.norm(p1 - p2)
+    p1_xy = np.array(p1[:2])
+    p2_xy = np.array(p2[:2])
+    return np.linalg.norm(p1_xy - p2_xy)
 
 
 def distance_3d(p1, p2, h_uav):
@@ -18,37 +32,124 @@ def distance_3d(p1, p2, h_uav):
     p2_xy = np.array(p2[:2])
     d_2d = np.linalg.norm(p1_xy - p2_xy)
     d_3d = np.sqrt(d_2d**2 + h_uav**2)
-    return d_2d, d_3d
+    return d_3d
 
 
-def P_LoS_3GPP(d_2d, h_uav):
-    theta = np.degrees(np.arctan2(h_uav, d_2d))
-    a = 12
-    b = 0.135
-    return 1 / (1 + a * np.exp(-b * (theta - a)))
+def RMa_LoS_proba(d_2d, h_uav):
+    if 40 <= h_uav and h_uav <= 300:
+        return 1
+    p1 = max(15021 * np.log10(h_uav) - 16053, 1000)
+    d1 = max(1350.8 * np.log10(h_uav) - 1602, 18)
+    if d_2d <= d1:
+        return 1
+    P_LoS = d1 / d_2d + np.exp(-d_2d / p1) * (1 - d1 / d_2d)
+    return P_LoS
 
 
-def path_loss_3GPP(d_3d, f, eta_los=1.0, eta_nlos=20.0):
-    c = 3e8  # m/s
-    L_fs = 20 * np.log10(d_3d) + 20 * np.log10(f) + 20 * np.log10(4 * np.pi / c)
-    PL_los = L_fs + eta_los
-    PL_nlos = L_fs + eta_nlos
-    return PL_los, PL_nlos
+def UMa_LoS_proba(d_2d, h_uav):
+    if 100 <= h_uav and h_uav <= 300:
+        return 1
+    p1 = 4300 * np.log10(h_uav) - 3800
+    d1 = max(460 * np.log10(h_uav) - 700, 18)
+    if d_2d <= d1:
+        return 1
+    P_LoS = d1 / d_2d + np.exp(-d_2d / p1) * (1 - d1 / d_2d)
+    return P_LoS
 
 
-def PL_avg_3GPP(ue_pos, uav_pos, h_uav, f=FREQUENCY_CARRIER_F):
-    d_2d, d_3d = distance_3d(ue_pos, uav_pos, h_uav)
-    p_los = P_LoS_3GPP(d_2d, h_uav)
-    PL_los, PL_nlos = path_loss_3GPP(d_3d, f)
-    PL_avg = p_los * PL_los + (1 - p_los) * PL_nlos  # (5)
-    return PL_avg
+def UMi_LoS_proba(d_2d, h_uav):
+    p1 = 233.98 * np.log10(h_uav) - 0.95
+    d1 = max(294.05 * np.log10(h_uav) - 432.94, 18)
+    if d_2d <= d1:
+        return 1
+    P_LoS = d1 / d_2d + np.exp(-d_2d / p1) * (1 - d1 / d_2d)
+    return P_LoS
 
 
-def calculate_offloading_rate(ue_pos, uav_pos, power_level):
-    P_tr_max_W = dbm_to_watt(MAXIMAL_TRANSMISSION_POWER_UES_P_TR_MAX)
-    N0_W = dbm_to_watt(AWGN_POWER_UAV_RECEIVER_N0)
-    power = P_tr_max_W * ((power_level + 1) / NUMBER_TRANSMISSION_POWER_LEVELS_LP)
-    PL_a = PL_avg_3GPP(ue_pos, uav_pos, UAV_HEIGHT_H)
-    snr_linear = power / (N0_W * 10 ** (PL_a / 10))
-    rate = BANDWIDTH_WIRELESS_CHANNEL_B * 1e6 * np.log2(1 + snr_linear)  # (4)
-    return rate  # bit/s
+def RMa_PL_LoS(d_3d, h_uav):
+    PL_LoS = max(23.9 - 1.8 * np.log10(h_uav), 20) * np.log10(d_3d) + 20 * np.log10(
+        40 * np.pi * carrier_frequency[0] / 3
+    )
+    return PL_LoS
+
+
+def UMa_PL_LoS(d_3d, h_uav):
+    PL_LoS = 28.0 + 22 * np.log10(d_3d) + 20 * np.log10(carrier_frequency[1])
+    return PL_LoS
+
+
+def UMi_PL_LoS(d_3d, h_uav):
+    PL_LoS = (
+        30.9
+        + (22.25 - 0.5 * np.log10(h_uav)) * np.log10(d_3d)
+        + 20 * np.log10(carrier_frequency[2])
+    )
+    return PL_LoS
+
+
+def RMa_PL_NLoS(d_3d, h_uav, PL_LoS):
+    PL_NLoS = max(
+        PL_LoS,
+        -12
+        + (35 - 5.3 * np.log10(h_uav)) * np.log10(d_3d)
+        + 20 * np.log10(40 * np.pi * carrier_frequency[0] / 3),
+    )
+    return PL_NLoS
+
+
+def UMa_PL_NLoS(d_3d, h_uav, PL_LoS):
+    PL_NLoS = (
+        -17.5
+        + (46 - 7 * np.log10(h_uav)) * np.log10(d_3d)
+        + 20 * np.log10(40 * np.pi * carrier_frequency[1] / 3)
+    )
+    return PL_NLoS
+
+
+def UMi_PL_NLoS(d_3d, h_uav, PL_LoS):
+    PL_NLoS = max(
+        PL_LoS,
+        32.4
+        + (43.2 - 7.6 * np.log10(h_uav)) * np.log10(d_3d)
+        + 20 * np.log10(carrier_frequency[2]),
+    )
+    return PL_NLoS
+
+
+def PL(d_2d, d_3d, h_uav, env_type):
+    if env_type == enum_type_uac["RMa-AV"]:
+        P_LoS = RMa_LoS_proba(d_2d, h_uav)
+        PL_LoS = RMa_PL_LoS(d_3d, h_uav)
+        PL_NLoS = RMa_PL_NLoS(d_3d, h_uav, PL_LoS)
+    elif env_type == enum_type_uac["UMa-AV"]:
+        P_LoS = UMa_LoS_proba(d_2d, h_uav)
+        PL_LoS = UMa_PL_LoS(d_3d, h_uav)
+        PL_NLoS = UMa_PL_NLoS(d_3d, h_uav, PL_LoS)
+    elif env_type == enum_type_uac["UMi-AV"]:
+        P_LoS = UMi_LoS_proba(d_2d, h_uav)
+        PL_LoS = UMi_PL_LoS(d_3d, h_uav)
+        PL_NLoS = UMi_PL_NLoS(d_3d, h_uav, PL_LoS)
+
+    PL = P_LoS * PL_LoS + (1 - P_LoS) * PL_NLoS
+    return PL
+
+
+def calculate_offloading_rate(
+    ue_position, uav_position, P_TR, env_type=enum_type_uac["UMa-AV"]
+):
+    h_uav = uav_position[2]  # UAV height
+    d_2d, d_3d = (
+        distance_2d(ue_position, uav_position),
+        distance_3d(ue_position, uav_position, h_uav),
+    )
+
+    PL_value = PL(d_2d, d_3d, h_uav, env_type)
+
+    N0 = convert_dBm_to_W(
+        AWGN_POWER_UAV_RECEIVER_N0
+    )  # Convert noise power from dBm to W
+
+    B = BANDWIDTH_WIRELESS_CHANNEL_B * 1e6  # Convert MHz to Hz
+
+    rate = B * np.log2(1 + P_TR / (N0 * 10 ** (PL_value / 10)))  # bits per second
+    return rate

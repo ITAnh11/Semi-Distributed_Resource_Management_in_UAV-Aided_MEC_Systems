@@ -26,7 +26,7 @@ class UAVMECEnv(gym.Env):
         self.max_latency_constraint = max_latency_constraint  # s
         self.max_computation_capacity_uav = max_computation_capacity_uav  # CPU cycles
         self.total_cpu_cycles = total_cpu_cycles  # CPU cycles
-        self.total_data_size = total_data_size * 1e3  # Kbits => bits
+        self.total_data_size = total_data_size * 1e3  # Bytes
 
         # State: [UE offload target, UE transmit power level, total power]
         self.observation_space = spaces.Box(
@@ -35,7 +35,7 @@ class UAVMECEnv(gym.Env):
             ),
             high=np.array(
                 [self.num_uavs] * self.num_ues
-                + [dbm_to_watt(MAXIMAL_TRANSMISSION_POWER_UES_P_TR_MAX)] * self.num_ues
+                + [MAXIMAL_TRANSMISSION_POWER_UES_P_TR_MAX] * self.num_ues
                 + [1e5],
                 dtype=np.float32,
             ),
@@ -55,16 +55,16 @@ class UAVMECEnv(gym.Env):
             [RECTANGULAR_AREA_SIDE_LENGTH / 2, RECTANGULAR_AREA_SIDE_LENGTH / 2, 0]
         )
 
-        # Position of UEs and UAVs
-        self.ue_pos = np.random.uniform(
-            0, RECTANGULAR_AREA_SIDE_LENGTH, size=(num_ues, 2)
-        )
+        # Position of UEs (x, y, z)
+        self.ue_pos = np.zeros((num_ues, 3), dtype=np.float32)
+
         self.ue_computation_capacity = np.random.uniform(
             UE_COMPUTATION_CAPACITY_FI0_RANGE[0],
             UE_COMPUTATION_CAPACITY_FI0_RANGE[1],
             self.num_ues,
         )
 
+        # Position of UAV(x, y, z)
         self.uav_pos = np.zeros((num_uavs, 3), dtype=np.float32)
 
         self.overall_transmission_power = 0
@@ -106,6 +106,13 @@ class UAVMECEnv(gym.Env):
             )
             self.uav_pos[i] = np.array([x, y, UAV_HEIGHT_H])
 
+    def _init_ue_positions(self):
+        # Initialize UE positions randomly within the rectangular area
+        self.ue_pos = np.random.uniform(
+            0, RECTANGULAR_AREA_SIDE_LENGTH, size=(self.num_ues, 2)
+        )
+        self.ue_pos = np.column_stack((self.ue_pos, np.zeros(self.num_ues)))
+
     def _update_ue_positions(self):
         # Update UE positions based on mobility constraints
         angles = np.random.uniform(
@@ -120,12 +127,16 @@ class UAVMECEnv(gym.Env):
             self.num_ues,
         )
 
-        self.ue_pos += np.column_stack(
-            (velocities * np.cos(angles), velocities * np.sin(angles))
-        )
+        for i in range(self.num_ues):
+            x_curr, y_curr, z_curr = self.ue_pos[i]
+            x_new = x_curr + velocities[i] * np.cos(angles[i]) * TIME_INTERVAL_PER_SLOT
+            y_new = y_curr + velocities[i] * np.sin(angles[i]) * TIME_INTERVAL_PER_SLOT
 
-        # Ensure UEs stay within the rectangular area
-        self.ue_pos = np.clip(self.ue_pos, 0, RECTANGULAR_AREA_SIDE_LENGTH)
+            # Ensure UE stays within the rectangular area
+            x_new = np.clip(x_new, 0, RECTANGULAR_AREA_SIDE_LENGTH)
+            y_new = np.clip(y_new, 0, RECTANGULAR_AREA_SIDE_LENGTH)
+
+            self.ue_pos[i] = np.array([x_new, y_new, z_curr])
 
     def _update_uav_positions(self):
         agular_velocity = UAV_VELOCITY_V / UAV_CIRCULAR_PATTERN_RADIUS_R
@@ -194,7 +205,7 @@ class UAVMECEnv(gym.Env):
                     self.cpu_cycles[ue_idx] / self.ue_computation_capacity[ue_idx]
                 )  # (14)
 
-                KAPPA = 1e-23  # cac tham so nay chua tim ra, trong bai bao
+                KAPPA = 1e-27
                 NU = 3
                 local_computation_power = KAPPA * (
                     self.ue_computation_capacity[ue_idx] ** NU
@@ -202,20 +213,24 @@ class UAVMECEnv(gym.Env):
 
                 sum_local_computation_power += local_computation_power
                 sum_time_processing_when_local += local_computation_time
+
+                transmission_power_ues[ue_idx] = (
+                    0  # No transmission power when local execution
+                )
             else:
                 self.number_connected_of_uavs[
                     offload_target - 1
                 ] += 1  # -1 to match action space
+
+                transmission_power = (
+                    power_level / NUMBER_TRANSMISSION_POWER_LEVELS_LP
+                ) * convert_dBm_to_W(MAXIMAL_TRANSMISSION_POWER_UES_P_TR_MAX)
+
                 offload_rate = calculate_offloading_rate(
                     self.ue_pos[ue_idx],
                     self.uav_pos[offload_target - 1],  # -1 to match action space
-                    power_level,
+                    transmission_power,
                 )
-                transmission_power = (
-                    power_level / NUMBER_TRANSMISSION_POWER_LEVELS_LP
-                ) * dbm_to_watt(
-                    MAXIMAL_TRANSMISSION_POWER_UES_P_TR_MAX
-                )  # lien quan o cho Action
 
                 transmission_power_ues[ue_idx] = transmission_power
                 sum_transmission_power += transmission_power  # (9)
@@ -261,11 +276,12 @@ class UAVMECEnv(gym.Env):
 
         P_TR_t = transmission_power_ues
         P_UE_t = sum_local_computation_power + sum_transmission_power
-        P_UAV_t = sum_computation_power_uavs + sum_propulsion_power_uavs
+        P_UAV_t = sum_computation_power_uavs
         P_SYS_t = P_UE_t + P_UAV_t  # (20)
 
         print(
             f"""
+            {transmission_power_ues},
             sum_transmission_power: {sum_transmission_power} W,
             sum_local_computation_power: {sum_local_computation_power} W,
             sum_computation_power_uavs: {sum_computation_power_uavs} W,
@@ -286,10 +302,9 @@ class UAVMECEnv(gym.Env):
         super().reset(seed=seed)
         self.time_slot = 0
         obs = np.zeros(self.observation_space.shape, dtype=np.float32)
+        self._init_ue_positions()
         self._init_uav_positions()
-        self.ue_pos = np.random.uniform(
-            0, RECTANGULAR_AREA_SIDE_LENGTH, size=(self.num_ues, 2)
-        )
+
         self.number_connected_of_uavs = np.zeros(self.num_uavs, dtype=np.int32)
 
         self.overall_transmission_power = 0
@@ -305,7 +320,7 @@ class UAVMECEnv(gym.Env):
     def step(self, action):
         self.time_slot += 1
         self._generate_task_data_and_cpu_demands()
-
+        self.number_connected_of_uavs = np.zeros(self.num_uavs, dtype=np.int32)
         Z_t = [action[i * 2] for i in range(self.num_ues)]
 
         reward, P_TR_t, P_SYS_t = self._caculate_reward(action)
@@ -328,7 +343,7 @@ class UAVMECEnv(gym.Env):
     def render(self, file_name=None):
         if not file_name:
             print(
-                f"Average system power consumption: {self.overall_power_consumption_system / self.time_slot:.2f} W"
+                f"Average system power consumption: {(self.overall_power_consumption_system) / self.time_slot:.2f} W"
             )
 
     def close(self):
@@ -338,7 +353,7 @@ class UAVMECEnv(gym.Env):
         action = np.zeros(self.action_space.shape, dtype=np.int32)
         for ue_idx in range(self.num_ues):
             offload_target = np.random.randint(0, self.num_uavs + 1)
-            power_level = np.random.randint(1, NUMBER_TRANSMISSION_POWER_LEVELS_LP)
+            power_level = np.random.randint(1, NUMBER_TRANSMISSION_POWER_LEVELS_LP + 1)
             action[ue_idx * 2] = offload_target
             action[ue_idx * 2 + 1] = power_level
         return action
@@ -350,7 +365,7 @@ class UAVMECEnv(gym.Env):
             distances = []
             for uav_idx in range(self.num_uavs):
                 uav_pos = self.uav_pos[uav_idx]
-                _, d_3d = distance_3d(ue_pos, uav_pos, UAV_HEIGHT_H)
+                d_3d = distance_3d(ue_pos, uav_pos, UAV_HEIGHT_H)
                 distances.append(d_3d)
             sorted_indices = np.argsort(distances)
             for uav_idx in sorted_indices:
@@ -362,7 +377,9 @@ class UAVMECEnv(gym.Env):
                     self.number_connected_of_uavs[uav_idx] += 1
                     break
 
-            power_level = np.random.randint(1, NUMBER_TRANSMISSION_POWER_LEVELS_LP)
+            power_level = np.random.randint(
+                1, NUMBER_TRANSMISSION_POWER_LEVELS_LP + 1
+            )  # Random power level from 1 to LP
             action[ue_idx * 2 + 1] = power_level
 
         return action
