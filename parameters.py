@@ -52,7 +52,7 @@ OMEGA_J = 2
 
 FMIN_UE = 1e7
 FMAX_UE = 1e8
-KAPPA = 2.5e-26  # W/cycle
+KAPPA = 3e-26  # W/cycle
 NU = 3
 
 # === Constraints ===
@@ -61,7 +61,7 @@ MAX_LATENCY_CONSTRAINT_TC = 1.0  # s
 # === Reward weights ===
 ZETA = 10.0  # UE power weight
 ETA = 1.0  # UAV power weight
-REWARD_PENALTY = 100  # penalty per violation
+REWARD_PENALTY = 1  # penalty per violation
 
 # === RL training parameters ===
 NUM_HIDDEN_LAYERS = 3
@@ -72,3 +72,20 @@ BATCH_SIZE_NB = 256
 GREEDY_PROBABILITY_EPSILON = 0.9
 EXPLORATION_INCREMENT_DELTA = 1e-4
 GAUSSIAN_NOISE_STD = 1e-3
+
+
+# BATCH_SIZE is the number of transitions sampled from the replay buffer
+# GAMMA is the discount factor as mentioned in the previous section
+# EPS_START is the starting value of epsilon
+# EPS_END is the final value of epsilon
+# EPS_DECAY controls the rate of exponential decay of epsilon, higher means a slower decay
+# TAU is the update rate of the target network
+# LR is the learning rate of the ``AdamW`` optimizer
+
+BATCH_SIZE = 256
+GAMMA = 0.99
+EPS_START = 0.9
+EPS_END = 0.01
+EPS_DECAY = 2500
+TAU = 0.005
+LR = 3e-4
