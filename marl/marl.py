@@ -31,14 +31,10 @@ class MARL:
         self.num_episodes = num_episodes
 
         self.n_actions = self.env.total_actions
-        self.n_observations = self.env.observation_space.shape[0]
+        self.n_observations = 2 + num_uavs * 2 + 3
 
-        self.policy_net = DQN(self.n_observations, self.num_ues * self.n_actions).to(
-            device
-        )
-        self.target_net = DQN(self.n_observations, self.num_ues * self.n_actions).to(
-            device
-        )
+        self.policy_net = DQN(self.n_observations, self.n_actions).to(device)
+        self.target_net = DQN(self.n_observations, self.n_actions).to(device)
         self.target_net.load_state_dict(self.policy_net.state_dict())
 
         self.optimizer = optim.AdamW(self.policy_net.parameters(), lr=LR, amsgrad=True)
@@ -48,35 +44,33 @@ class MARL:
     def select_action(self, state, eval_mode=False):
         if eval_mode:
             with torch.no_grad():
-                q_values = self.policy_net(state).view(self.num_ues, self.n_actions)
-                actions = q_values.argmax(dim=1).cpu().numpy()
-            return actions
-
-        # Training mode: epsilon-greedy
+                return self.policy_net(state).max(1).indices.view(1, 1)
         sample = random.random()
         eps_threshold = EPS_END + (EPS_START - EPS_END) * math.exp(
             -1.0 * self.steps_done / EPS_DECAY
         )
-        self.steps_done += 1
-
         if sample > eps_threshold:
             with torch.no_grad():
-                q_values = self.policy_net(state).view(self.num_ues, self.n_actions)
-                actions = q_values.argmax(dim=1).cpu().numpy()
+                # t.max(1) will return the largest column value of each row.
+                # second column on max result is index of where max element was
+                # found, so we pick action with the larger expected reward.
+                return self.policy_net(state).max(1).indices.view(1, 1)
         else:
-            actions = (
-                torch.randint(0, self.n_actions, (self.num_ues,), device=device)
-                .cpu()
-                .numpy()
+            return torch.tensor(
+                [[self.env.action_space.sample()]], device=device, dtype=torch.long
             )
-        return actions
 
     def optimize_model(self):
         if len(self.memory) < BATCH_SIZE:
             return
         transitions = self.memory.sample(BATCH_SIZE)
+        # Transpose the batch (see https://stackoverflow.com/a/19343/3343043 for
+        # detailed explanation). This converts batch-array of Transitions
+        # to Transition of batch-arrays.
         batch = Transition(*zip(*transitions))
 
+        # Compute a mask of non-final states and concatenate the batch elements
+        # (a final state would've been the one after which simulation ended)
         non_final_mask = torch.tensor(
             tuple(map(lambda s: s is not None, batch.next_state)),
             device=device,
@@ -89,109 +83,108 @@ class MARL:
         action_batch = torch.cat(batch.action)
         reward_batch = torch.cat(batch.reward)
 
-        # Compute Q(s, a)
-        q_values = self.policy_net(state_batch).view(-1, self.num_ues, self.n_actions)
-        action_batch = action_batch.view(-1, self.num_ues, 1)
-        state_action_values = (
-            torch.gather(q_values, 2, action_batch).squeeze(-1).mean(dim=1)
-        )
+        # Compute Q(s_t, a) - the model computes Q(s_t), then we select the
+        # columns of actions taken. These are the actions which would've been taken
+        # for each batch state according to policy_net
+        state_action_values = self.policy_net(state_batch).gather(1, action_batch)
 
-        # Compute Q(s', a')
+        # Compute V(s_{t+1}) for all next states.
+        # Expected values of actions for non_final_next_states are computed based
+        # on the "older" target_net; selecting their best reward with max(1).values
+        # This is merged based on the mask, such that we'll have either the expected
+        # state value or 0 in case the state was final.
         next_state_values = torch.zeros(BATCH_SIZE, device=device)
         with torch.no_grad():
-            next_q_values = self.target_net(non_final_next_states).view(
-                -1, self.num_ues, self.n_actions
+            next_state_values[non_final_mask] = (
+                self.target_net(non_final_next_states).max(1).values
             )
-            max_next_q = next_q_values.max(dim=2).values.mean(dim=1)
-            next_state_values[non_final_mask] = max_next_q
+        # Compute the expected Q values
+        expected_state_action_values = (next_state_values * GAMMA) + reward_batch
 
-        expected_q_values = reward_batch + (GAMMA * next_state_values)
-
-        # Loss and backpropagation
+        # Compute Huber loss
         criterion = nn.SmoothL1Loss()
-        loss = criterion(state_action_values, expected_q_values)
+        loss = criterion(state_action_values, expected_state_action_values.unsqueeze(1))
 
+        # Optimize the model
         self.optimizer.zero_grad()
         loss.backward()
+        # In-place gradient clipping
         torch.nn.utils.clip_grad_value_(self.policy_net.parameters(), 100)
         self.optimizer.step()
 
     def run(self, num_steps=1000):
         print("Training started...")
-        obs, _ = self.env.reset()
-        state = torch.tensor(obs, device=device, dtype=torch.float32).unsqueeze(0)
-        for episode in range(self.num_episodes):
-            if episode % 1000 == 0:
-                print(f"Episode {episode}/{self.num_episodes}")
-
-            actions = self.select_action(state)
-            obs_next, reward, terminated, truncated, info = self.env.step(actions)
-
-            reward = torch.tensor([reward], device=device)
-
-            if terminated:
-                next_state = None
-            else:
-                next_state = torch.tensor(
-                    obs_next, dtype=torch.float32, device=device
-                ).unsqueeze(0)
-
-            # Store the transition in memory
-            action_tensor = torch.tensor(
-                actions, dtype=torch.long, device=device
+        self.env.reset()
+        states = []
+        for ue_id in range(self.env.num_ues):
+            state = torch.tensor(
+                self.env.get_state_ue(ue_id), device=device, dtype=torch.float32
             ).unsqueeze(0)
-            self.memory.push(state, action_tensor, next_state, reward)
+            states.append(state)
 
-            # Move to the next state
-            state = next_state
+        for episode in range(self.num_episodes):
+            actions = []
+            for ue_id in range(self.env.num_ues):
+                state = states[ue_id]
+                action = self.select_action(state)
+                actions.append(action)
 
-            # Perform one step of the optimization (on the policy network)
+            self.steps_done += 1
+
+            _, reward, terminated, truncated, info = self.env.step(actions)
+
+            next_states = []
+            for ue_id in range(self.env.num_ues):
+                next_state = torch.tensor(
+                    self.env.get_state_ue(ue_id), device=device, dtype=torch.float32
+                ).unsqueeze(0)
+                next_states.append(next_state)
+
+            reward = torch.tensor(reward, device=device, dtype=torch.float32).unsqueeze(
+                0
+            )
+            for ue_id in range(self.env.num_ues):
+                self.memory.push(
+                    states[ue_id], actions[ue_id], next_states[ue_id], reward
+                )
+            states = next_states
+
             self.optimize_model()
 
             # Soft update of the target network's weights
             # θ′ ← τ θ + (1 −τ )θ′
-            target_net_state_dict = self.target_net.state_dict()
+            self.target_net_state_dict = self.target_net.state_dict()
             policy_net_state_dict = self.policy_net.state_dict()
             for key in policy_net_state_dict:
-                target_net_state_dict[key] = policy_net_state_dict[
+                self.target_net_state_dict[key] = policy_net_state_dict[
                     key
-                ] * TAU + target_net_state_dict[key] * (1 - TAU)
-            self.target_net.load_state_dict(target_net_state_dict)
-
+                ] * TAU + self.target_net_state_dict[key] * (1 - TAU)
+            self.target_net.load_state_dict(self.target_net_state_dict)
+            if episode % 100 == 0:
+                print(
+                    f"Episode {episode}, Total Energy: {info['total_energy_consumption']:.2f} J"
+                )
         print("Training completed.")
-        print("Testing the model...")
+
+        print("Testing started...")
         total_energy = []
-        for _ in range(num_steps):
-            actions = self.select_action(state, eval_mode=True)
-            obs_next, reward, done, truncated, info = self.env.step(actions)
-            state = torch.tensor(
-                obs_next, device=device, dtype=torch.float32
-            ).unsqueeze(0)
+        for step in range(num_steps):
+            actions = []
+            for ue_id in range(self.env.num_ues):
+                state = states[ue_id]
+                action = self.select_action(state, eval_mode=True)
+                actions.append(action)
+
+            _, reward, terminated, truncated, info = self.env.step(actions)
+
+            next_states = []
+            for ue_id in range(self.env.num_ues):
+                next_state = torch.tensor(
+                    self.env.get_state_ue(ue_id), device=device, dtype=torch.float32
+                ).unsqueeze(0)
+                next_states.append(next_state)
 
             total_energy.append(info["total_energy_consumption"])
-        print("Testing completed. Average energy consumption:", np.mean(total_energy))
-        return sum(total_energy) / num_steps
 
-    def save_model(self, path):
-        os.makedirs(os.path.dirname(path), exist_ok=True)  # Tạo thư mục nếu chưa có
-        torch.save(self.policy_net.state_dict(), path)
-        print(f"Model saved to {path}")
-
-    def load_model(self, path):
-        self.policy_net.load_state_dict(torch.load(path, map_location=device))
-        self.target_net.load_state_dict(self.policy_net.state_dict())
-        print(f"Model loaded from {path}")
-
-    def test(self, num_episodes=10):
-        total_energy = []
-        obs, _ = self.env.reset()
-        state = torch.tensor(obs, device=device, dtype=torch.float32).unsqueeze(0)
-        for _ in range(num_episodes):
-            actions = self.select_action(state, eval_mode=True)
-            obs_next, reward, done, truncated, info = self.env.step(actions)
-            state = torch.tensor(
-                obs_next, device=device, dtype=torch.float32
-            ).unsqueeze(0)
-
-            total_energy.append(info["total_energy_consumption"])
-        return sum(total_energy) / num_episodes
+            states = next_states
+        return np.mean(total_energy)

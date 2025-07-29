@@ -173,7 +173,7 @@ class MAFRL:
         self.num_episodes = num_episodes
 
         self.n_actions = self.env.total_actions
-        self.n_observations = 3
+        self.n_observations = 2 + num_uavs * 2 + 3
 
         self.ue_agents = [
             UE_Agent(ue_id, self.n_observations, self.n_actions)
@@ -192,42 +192,27 @@ class MAFRL:
             for ue_agent in self.ue_agents:
                 ue_agent.reset(self.server.get_parameters())
 
-            states = self.env._get_obs()
+            states = []
+            for ue_id in range(self.num_ues):
+                state = self.env.get_state_ue(ue_id)
+                states.append(
+                    torch.tensor(state, dtype=torch.float32, device=device).unsqueeze(0)
+                )
+
             for episode in range(self.num_episodes):
                 if episode % 100 == 0:
                     print(f"Episode {episode}/{self.num_episodes}")
                 # Select actions for each UE agent
                 actions = []
                 for ue_agent in self.ue_agents:
-                    state = [
-                        states[ue_agent.ue_id],
-                        states[ue_agent.ue_id + self.num_ues],
-                        states[2 * self.num_ues],
-                    ]
-                    state = torch.tensor(
-                        state, dtype=torch.float32, device=device
-                    ).unsqueeze(0)
+                    state = states[ue_agent.ue_id]
                     action = ue_agent.select_action(state, self.env)
                     actions.append(action)
-
-                states_next, reward, terminated, truncated, info = self.env.step(
-                    actions
-                )
+                _, reward, terminated, truncated, info = self.env.step(actions)
                 # Store transitions in each UE agent's memory
+                next_states = []
                 for ue_agent in self.ue_agents:
-                    state = [
-                        states[ue_agent.ue_id],
-                        states[ue_agent.ue_id + self.num_ues],
-                        states[2 * self.num_ues],
-                    ]
-                    state = torch.tensor(
-                        state, dtype=torch.float32, device=device
-                    ).unsqueeze(0)
-                    next_state = [
-                        states_next[ue_agent.ue_id],
-                        states_next[ue_agent.ue_id + self.num_ues],
-                        states_next[2 * self.num_ues],
-                    ]
+                    next_state = self.env.get_state_ue(ue_agent.ue_id)
                     next_state = (
                         torch.tensor(
                             next_state, dtype=torch.float32, device=device
@@ -235,6 +220,7 @@ class MAFRL:
                         if next_state is not None
                         else None
                     )
+                    next_states.append(next_state)
                     if not torch.is_tensor(reward):
                         reward = torch.tensor(
                             reward, dtype=torch.float32, device=device
@@ -249,8 +235,10 @@ class MAFRL:
                     else:
                         action = actions[ue_agent.ue_id].detach().clone().unsqueeze(0)
 
-                    ue_agent.memory.push(state, action, next_state, reward)
-                states = states_next
+                    ue_agent.memory.push(
+                        states[ue_agent.ue_id], action, next_state, reward
+                    )
+                states = next_states
                 # Optimize each UE agent's model
                 for ue_agent in self.ue_agents:
                     ue_agent.optimize_model()
@@ -269,19 +257,16 @@ class MAFRL:
         for _ in range(1000):
             actions = []
             for ue_agent in self.ue_agents:
-                state = [
-                    states[ue_agent.ue_id],
-                    states[ue_agent.ue_id + self.num_ues],
-                    states[2 * self.num_ues],
-                ]
                 state = torch.tensor(
-                    state, dtype=torch.float32, device=device
+                    self.env.get_state_ue(ue_agent.ue_id),
+                    dtype=torch.float32,
+                    device=device,
                 ).unsqueeze(0)
+                # Select action in evaluation mode
                 action = ue_agent.select_action(state, self.env, eval_mode=True)
                 actions.append(action)
 
-            states_next, reward, done, truncated, info = self.env.step(actions)
-            states = states_next
+            _, reward, done, truncated, info = self.env.step(actions)
 
             total_energy.append(info["total_energy_consumption"])
 

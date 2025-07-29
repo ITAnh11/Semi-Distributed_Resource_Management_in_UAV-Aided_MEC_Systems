@@ -61,7 +61,7 @@ MAX_LATENCY_CONSTRAINT_TC = 1.0  # s
 # === Reward weights ===
 ZETA = 10.0  # UE power weight
 ETA = 1.0  # UAV power weight
-REWARD_PENALTY = 1  # penalty per violation
+REWARD_PENALTY = 5  # penalty per violation
 
 # === RL training parameters ===
 NUM_HIDDEN_LAYERS = 3
@@ -83,7 +83,7 @@ GAUSSIAN_NOISE_STD = 1e-3
 # LR is the learning rate of the ``AdamW`` optimizer
 
 BATCH_SIZE = 256
-GAMMA = 0.99
+GAMMA = 0.7
 EPS_START = 0.9
 EPS_END = 0.01
 EPS_DECAY = 2500

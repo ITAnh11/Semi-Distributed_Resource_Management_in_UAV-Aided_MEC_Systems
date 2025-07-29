@@ -49,7 +49,7 @@ class UAVMECEnv(gym.Env):
             [
                 np.full(num_ues, self.num_uavs, dtype=np.float32),
                 np.full(num_ues, MAX_TX_POWER_W, dtype=np.float32),
-                [1e4],
+                [1e2],
             ]
         )
         self.observation_space = spaces.Box(
@@ -94,7 +94,7 @@ class UAVMECEnv(gym.Env):
     def _get_obs(self):
         offload_norm = self.offloading_decision / self.num_uavs
         power_norm = self.transmission_power / MAX_TX_POWER_W
-        power_sys_norm = np.array([self.total_system_power / 1e4])
+        power_sys_norm = np.array([self.total_system_power / 1e2])
         return np.concatenate([offload_norm, power_norm, power_sys_norm]).astype(
             np.float32
         )
@@ -175,7 +175,7 @@ class UAVMECEnv(gym.Env):
         )
         self.total_system_power = total_power_ue + total_power_uav
 
-        # self._update_ue_positions()
+        self._update_ue_positions()
         # self._update_uav_positions()
 
         return (
@@ -220,3 +220,33 @@ class UAVMECEnv(gym.Env):
         return np.zeros(
             self.num_ues, dtype=int
         )  # offload = 0, power = 0 → action_id = 0
+
+    def get_state_ue(self, ue_id):
+        offload_norm = self.offloading_decision[ue_id] / self.num_uavs
+        power_norm = self.transmission_power[ue_id] / MAX_TX_POWER_W
+        ue_position_norm = self.ue_positions[ue_id] / AREA_SIZE
+        uav_positions_norm = self.uav_positions / AREA_SIZE
+        power_sys_norm = self.total_system_power / 1e2
+        return np.concatenate(
+            [
+                ue_position_norm,
+                uav_positions_norm.flatten(),
+                [offload_norm, power_norm, power_sys_norm],
+            ]
+        ).astype(np.float32)
+
+    def get_state_all(self):
+        offload_norm = self.offloading_decision / self.num_uavs
+        uav_positions_norm = self.uav_positions / AREA_SIZE
+        ue_positions_norm = self.ue_positions / AREA_SIZE
+        power_norm = self.transmission_power / MAX_TX_POWER_W
+        power_sys_norm = np.array([self.total_system_power / 1e2], dtype=np.float32)
+        return np.concatenate(
+            [
+                ue_positions_norm.flatten(),
+                uav_positions_norm.flatten(),
+                offload_norm,
+                power_norm,
+                power_sys_norm,
+            ]
+        ).astype(np.float32)

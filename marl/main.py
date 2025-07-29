@@ -5,9 +5,9 @@ from parameters import *
 from marl.marl import MARL
 
 # === Thông số mô phỏng ===
-num_steps = 100  # số time slot mô phỏng mỗi case (hoặc 1000 tuỳ máy)
+num_steps = 1000  # số time slot mô phỏng mỗi case (hoặc 1000 tuỳ máy)
 # ue_list = [20, 40, 60, 80, 100, 120, 140, 160, 180, 200]  # số UE giống paper
-ue_list = [20, 40, 60, 80]  # số UE giống paper
+ue_list = [20, 40, 60, 80, 100]  # số UE giống paper
 
 
 # Các list lưu average power với từng số lượng UE
@@ -54,7 +54,7 @@ for num_ue in ue_list:  # số UAV cố định
         if terminated:
             env.reset()
 
-    marl = MARL(num_ues=num_ue, num_uavs=10, num_episodes=50000)
+    marl = MARL(num_ues=num_ue, num_uavs=10, num_episodes=10000)
     average_energy = marl.run(num_steps=num_steps)
 
     # Lưu trung bình power từng baseline
@@ -76,4 +76,4 @@ plt.title("Impact of Number of UEs on Sum Power Consumption", fontsize=14)
 plt.legend(fontsize=12)
 plt.grid(True)
 plt.tight_layout()
-plt.savefig("baseline_vs_num_ues.png")
+plt.savefig("baseline_vs_num_ues_marl.png")
