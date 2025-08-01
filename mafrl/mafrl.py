@@ -117,11 +117,14 @@ class UE_Agent:
             ] * TAU + target_net_state_dict[key] * (1 - TAU)
         self.target_net.load_state_dict(target_net_state_dict)
 
-    def reset(self, parameters):
-        self.policy_net.load_state_dict(parameters)
+    def set_parameters(self, state_dict):
+        """Set the parameters of the agent's policy network."""
+        self.policy_net.load_state_dict(state_dict)
         self.target_net.load_state_dict(self.policy_net.state_dict())
-        self.memory = ReplayMemory(REPLAY_MEMORY_SIZE_M)
-        self.steps_done = 0
+
+    def get_parameters(self):
+        """Get the parameters of the agent's policy network."""
+        return self.policy_net.state_dict()
 
 
 class Server:
@@ -150,7 +153,8 @@ class Server:
             k: torch.zeros_like(v) for k, v in self.policy_net.state_dict().items()
         }
         for agent in agents:
-            agent_params = agent.policy_net.state_dict()
+            agent_params = agent.get_parameters()
+            # Sum the parameters from each agent
             for k in total_params.keys():
                 total_params[k] += agent_params[k]
 
@@ -162,7 +166,14 @@ class Server:
 
 
 class MAFRL:
-    def __init__(self, num_ues=100, num_uavs=10, num_episodes=1000):
+    def __init__(
+        self,
+        num_ues=100,
+        num_uavs=10,
+        num_episodes=1000,
+        aggregation_interval=10,
+        federated_rounds=5,
+    ):
         self.env = UAVMECEnv(
             num_ues=num_ues,
             num_uavs=num_uavs,
@@ -180,96 +191,84 @@ class MAFRL:
             for ue_id in range(self.num_ues)
         ]
         self.server = Server(self.n_observations, self.n_actions)
-
-    def reset(self):
-        self.env.reset()
-        self.server.reset()
-        for ue_agent in self.ue_agents:
-            ue_agent.reset(self.server.get_parameters())
+        self.aggregation_interval = aggregation_interval
+        self.federated_rounds = federated_rounds
 
     def run(self):
-        for _ in range(10):
-            for ue_agent in self.ue_agents:
-                ue_agent.reset(self.server.get_parameters())
+        self.env.reset()
+        for ue_agent in self.ue_agents:
+            ue_agent.set_parameters(self.server.get_parameters())
+        states = []
+        for ue_agent in self.ue_agents:
+            state = self.env.get_state_ue(ue_agent.ue_id)
+            state = torch.tensor(state, device=device, dtype=torch.float32).unsqueeze(0)
+            states.append(state)
+        for episode in range(self.num_episodes):
+            actions = []
+            for ue_agent, state in zip(self.ue_agents, states):
+                action = ue_agent.select_action(state, self.env)
+                actions.append(action)
 
-            states = []
-            for ue_id in range(self.num_ues):
-                state = self.env.get_state_ue(ue_id)
-                states.append(
-                    torch.tensor(state, dtype=torch.float32, device=device).unsqueeze(0)
+            _, reward, terminateds, _, infos = self.env.step(actions)
+            if episode % 100 == 0:
+                print(
+                    f"Episode {episode + 1}/{self.num_episodes} - Total Energy: {infos['total_energy_consumption']:.2f}"
                 )
 
-            for episode in range(self.num_episodes):
-                if episode % 100 == 0:
-                    print(f"Episode {episode}/{self.num_episodes}")
-                # Select actions for each UE agent
-                actions = []
-                for ue_agent in self.ue_agents:
-                    state = states[ue_agent.ue_id]
-                    action = ue_agent.select_action(state, self.env)
-                    actions.append(action)
-                _, reward, terminated, truncated, info = self.env.step(actions)
-                # Store transitions in each UE agent's memory
-                next_states = []
-                for ue_agent in self.ue_agents:
-                    next_state = self.env.get_state_ue(ue_agent.ue_id)
-                    next_state = (
-                        torch.tensor(
-                            next_state, dtype=torch.float32, device=device
-                        ).unsqueeze(0)
-                        if next_state is not None
-                        else None
-                    )
-                    next_states.append(next_state)
-                    if not torch.is_tensor(reward):
-                        reward = torch.tensor(
-                            reward, dtype=torch.float32, device=device
-                        ).unsqueeze(0)
-                    else:
-                        reward = reward.detach().clone().unsqueeze(0)
+            next_states = []
+            reward = torch.tensor(reward, device=device, dtype=torch.float32).unsqueeze(
+                0
+            )
+            for ue_agent in self.ue_agents:
+                next_state = torch.tensor(
+                    self.env.get_state_ue(ue_agent.ue_id),
+                    device=device,
+                    dtype=torch.float32,
+                ).unsqueeze(0)
 
-                    if not torch.is_tensor(actions[ue_agent.ue_id]):
-                        action = torch.tensor(
-                            actions[ue_agent.ue_id], dtype=torch.long, device=device
-                        ).unsqueeze(0)
-                    else:
-                        action = actions[ue_agent.ue_id].detach().clone().unsqueeze(0)
+                next_states.append(next_state)
 
-                    ue_agent.memory.push(
-                        states[ue_agent.ue_id], action, next_state, reward
-                    )
-                states = next_states
-                # Optimize each UE agent's model
+            for ue_agent in self.ue_agents:
+
+                ue_agent.memory.push(
+                    states[ue_agent.ue_id],
+                    actions[ue_agent.ue_id],
+                    next_states[ue_agent.ue_id],
+                    reward,
+                )
+            states = next_states
+            if episode % 5 == 0:
                 for ue_agent in self.ue_agents:
                     ue_agent.optimize_model()
                     ue_agent.soft_update_target()
 
-                # Update the server parameters
+            # Aggregate parameters from all UE agents
+            if (episode + 1) % self.aggregation_interval == 0:
+
                 self.server.federated_aggregate(self.ue_agents)
-
-                # update the UE agents with the new server parameters
                 for ue_agent in self.ue_agents:
-                    ue_agent.reset(self.server.get_parameters())
-        print("Training completed.")
+                    ue_agent.set_parameters(self.server.get_parameters())
 
-        print("Testing the model...")
-        total_energy = []
-        for _ in range(1000):
+        # Final evaluation after training
+        total_energy = 0
+        for _ in range(100):
             actions = []
-            for ue_agent in self.ue_agents:
-                state = torch.tensor(
-                    self.env.get_state_ue(ue_agent.ue_id),
-                    dtype=torch.float32,
-                    device=device,
-                ).unsqueeze(0)
-                # Select action in evaluation mode
+            for ue_agent, state in zip(self.ue_agents, states):
                 action = ue_agent.select_action(state, self.env, eval_mode=True)
                 actions.append(action)
 
-            _, reward, done, truncated, info = self.env.step(actions)
+            _, reward, terminateds, _, infos = self.env.step(actions)
+            total_energy += infos["total_energy_consumption"]
+            next_states = []
+            for ue_agent in self.ue_agents:
+                next_state = torch.tensor(
+                    self.env.get_state_ue(ue_agent.ue_id),
+                    device=device,
+                    dtype=torch.float32,
+                ).unsqueeze(0)
+                next_states.append(next_state)
+            states = next_states
 
-            total_energy.append(info["total_energy_consumption"])
-
-        average_energy = np.mean(total_energy)
-        print("Testing completed. Average energy consumption:", average_energy)
+        average_energy = total_energy / 100
+        print(f"Average Energy Consumption: {average_energy:.2f} J")
         return average_energy

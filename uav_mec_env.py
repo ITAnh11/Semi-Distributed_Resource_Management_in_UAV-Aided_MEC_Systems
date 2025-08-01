@@ -176,7 +176,7 @@ class UAVMECEnv(gym.Env):
         self.total_system_power = total_power_ue + total_power_uav
 
         self._update_ue_positions()
-        # self._update_uav_positions()
+        self._update_uav_positions()
 
         return (
             self._get_obs(),
@@ -232,21 +232,5 @@ class UAVMECEnv(gym.Env):
                 ue_position_norm,
                 uav_positions_norm.flatten(),
                 [offload_norm, power_norm, power_sys_norm],
-            ]
-        ).astype(np.float32)
-
-    def get_state_all(self):
-        offload_norm = self.offloading_decision / self.num_uavs
-        uav_positions_norm = self.uav_positions / AREA_SIZE
-        ue_positions_norm = self.ue_positions / AREA_SIZE
-        power_norm = self.transmission_power / MAX_TX_POWER_W
-        power_sys_norm = np.array([self.total_system_power / 1e2], dtype=np.float32)
-        return np.concatenate(
-            [
-                ue_positions_norm.flatten(),
-                uav_positions_norm.flatten(),
-                offload_norm,
-                power_norm,
-                power_sys_norm,
             ]
         ).astype(np.float32)
