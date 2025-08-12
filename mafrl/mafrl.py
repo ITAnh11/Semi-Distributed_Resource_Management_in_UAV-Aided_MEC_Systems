@@ -147,33 +147,25 @@ class Server:
     def set_parameters(self, state_dict):
         self.policy_net.load_state_dict(state_dict)
 
-    def federated_aggregate(self, agents):
-        """Aggregate parameters from multiple agents."""
+    def federated_aggregate(self, agents_subset):
+        """Aggregate parameters from a subset of agents."""
         total_params = {
             k: torch.zeros_like(v) for k, v in self.policy_net.state_dict().items()
         }
-        for agent in agents:
+        for agent in agents_subset:
             agent_params = agent.get_parameters()
-            # Sum the parameters from each agent
             for k in total_params.keys():
                 total_params[k] += agent_params[k]
 
-        # Average the parameters
+        # Average the parameters (only over the selected agents)
         for k in total_params.keys():
-            total_params[k] /= len(agents)
+            total_params[k] /= len(agents_subset)
 
         self.set_parameters(total_params)
 
 
 class MAFRL:
-    def __init__(
-        self,
-        num_ues=100,
-        num_uavs=10,
-        num_episodes=1000,
-        aggregation_interval=10,
-        federated_rounds=5,
-    ):
+    def __init__(self, num_ues=100, num_uavs=10, num_episodes=1000):
         self.env = UAVMECEnv(
             num_ues=num_ues,
             num_uavs=num_uavs,
@@ -185,14 +177,21 @@ class MAFRL:
 
         self.n_actions = self.env.total_actions
         self.n_observations = 2 + num_uavs * 2 + 3
+        # self.n_observations = 3
 
         self.ue_agents = [
             UE_Agent(ue_id, self.n_observations, self.n_actions)
             for ue_id in range(self.num_ues)
         ]
         self.server = Server(self.n_observations, self.n_actions)
-        self.aggregation_interval = aggregation_interval
-        self.federated_rounds = federated_rounds
+
+        self.aggregation_interval = 300
+        self.target_update_interval = 1
+
+    def train_and_update(self, ue_agent):
+        """Train the UE agent and update its target network."""
+        ue_agent.optimize_model()
+        ue_agent.soft_update_target()
 
     def run(self):
         self.env.reset()
@@ -203,6 +202,7 @@ class MAFRL:
             state = self.env.get_state_ue(ue_agent.ue_id)
             state = torch.tensor(state, device=device, dtype=torch.float32).unsqueeze(0)
             states.append(state)
+
         for episode in range(self.num_episodes):
             actions = []
             for ue_agent, state in zip(self.ue_agents, states):
@@ -210,9 +210,9 @@ class MAFRL:
                 actions.append(action)
 
             _, reward, terminateds, _, infos = self.env.step(actions)
-            if episode % 100 == 0:
+            if episode % 10 == 0:
                 print(
-                    f"Episode {episode + 1}/{self.num_episodes} - Total Energy: {infos['total_energy_consumption']:.2f}"
+                    f"Episode {episode + 1}/{self.num_episodes} - Total Energy: {infos['total_energy_consumption']:.3f}"
                 )
 
             next_states = []
@@ -225,11 +225,9 @@ class MAFRL:
                     device=device,
                     dtype=torch.float32,
                 ).unsqueeze(0)
-
                 next_states.append(next_state)
 
             for ue_agent in self.ue_agents:
-
                 ue_agent.memory.push(
                     states[ue_agent.ue_id],
                     actions[ue_agent.ue_id],
@@ -237,12 +235,13 @@ class MAFRL:
                     reward,
                 )
             states = next_states
-            if episode % 5 == 0:
+
+            if episode % self.target_update_interval == 0:
                 for ue_agent in self.ue_agents:
                     ue_agent.optimize_model()
                     ue_agent.soft_update_target()
 
-            # Aggregate parameters from all UE agents
+            # Partial Aggregation
             if (episode + 1) % self.aggregation_interval == 0:
 
                 self.server.federated_aggregate(self.ue_agents)
@@ -251,7 +250,7 @@ class MAFRL:
 
         # Final evaluation after training
         total_energy = 0
-        for _ in range(100):
+        for _ in range(1000):
             actions = []
             for ue_agent, state in zip(self.ue_agents, states):
                 action = ue_agent.select_action(state, self.env, eval_mode=True)
@@ -269,6 +268,61 @@ class MAFRL:
                 next_states.append(next_state)
             states = next_states
 
-        average_energy = total_energy / 100
-        print(f"Average Energy Consumption: {average_energy:.2f} J")
+        average_energy = total_energy / 1000
+        print(f"Average Energy Consumption: {average_energy:.3f} J")
+        return average_energy
+
+    def save_model(self, filename):
+        """Save the model parameters to a file."""
+        if not os.path.exists(os.path.dirname(filename)):
+            os.makedirs(os.path.dirname(filename))
+        torch.save(self.server.get_parameters(), filename)
+        print(f"Model saved to {filename}")
+
+    def load_model(self, filename):
+        """Load the model parameters from a file."""
+        if os.path.exists(filename):
+            state_dict = torch.load(filename, map_location=device)
+            self.server.set_parameters(state_dict)
+            for ue_agent in self.ue_agents:
+                ue_agent.set_parameters(state_dict)
+            print(f"Model loaded from {filename}")
+        else:
+            print(f"Model file {filename} does not exist.")
+
+    def test(self, num_steps=1000):
+        """Test the trained model."""
+        print("Testing started...")
+        states = []
+        for ue_id in range(self.env.num_ues):
+            state = torch.tensor(
+                self.env.get_state_ue(ue_id), device=device, dtype=torch.float32
+            ).unsqueeze(0)
+            states.append(state)
+
+        total_energy = []
+        for step in range(num_steps):
+            actions = []
+            for ue_id in range(self.env.num_ues):
+                state = states[ue_id]
+                action = self.ue_agents[ue_id].select_action(
+                    state, self.env, eval_mode=True
+                )
+                actions.append(action)
+
+            _, reward, terminateds, _, infos = self.env.step(actions)
+
+            next_states = []
+            for ue_id in range(self.env.num_ues):
+                next_state = torch.tensor(
+                    self.env.get_state_ue(ue_id), device=device, dtype=torch.float32
+                ).unsqueeze(0)
+                next_states.append(next_state)
+
+            total_energy.append(infos["total_energy_consumption"])
+
+            states = next_states
+
+        average_energy = np.mean(total_energy)
+        print(f"Average Energy Consumption: {average_energy:.3f} J")
         return average_energy

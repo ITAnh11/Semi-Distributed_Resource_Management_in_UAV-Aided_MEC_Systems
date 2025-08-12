@@ -6,8 +6,8 @@ from marl.marl import MARL
 
 # === Thông số mô phỏng ===
 num_steps = 1000  # số time slot mô phỏng mỗi case (hoặc 1000 tuỳ máy)
-# ue_list = [20, 40, 60, 80, 100, 120, 140, 160, 180, 200]  # số UE giống paper
-ue_list = [20, 40, 60, 80, 100]  # số UE giống paper
+ue_list = [20, 40, 60, 80, 100, 120, 140, 160, 180, 200]  # số UE giống paper
+# ue_list = [20, 40, 60, 80, 100]  # số UE giống paper
 
 
 # Các list lưu average power với từng số lượng UE
@@ -55,7 +55,9 @@ for num_ue in ue_list:  # số UAV cố định
             env.reset()
 
     marl = MARL(num_ues=num_ue, num_uavs=10, num_episodes=50000)
-    average_energy = marl.run(num_steps=num_steps)
+    marl.load_model("marl/model/marl_model_ver_ue.pth")
+    print("Bắt đầu MARL...")
+    average_energy = marl.test(num_steps=num_steps)
 
     # Lưu trung bình power từng baseline
     greedy_results.append(np.mean(greedy_power))

@@ -7,7 +7,7 @@ from mafrl.mafrl import MAFRL
 # === Thông số mô phỏng ===
 num_steps = 100  # số time slot mô phỏng mỗi case (hoặc 1000 tuỳ máy)
 # ue_list = [20, 40, 60, 80, 100, 120, 140, 160, 180, 200]  # số UE giống paper
-ue_list = [20, 40, 60]  # số UE giống paper
+ue_list = [20]  # số UE giống paper
 
 
 # Các list lưu average power với từng số lượng UE

@@ -6,10 +6,11 @@ from marl.marl import MARL
 from mafrl.mafrl import MAFRL
 
 # === Thông số mô phỏng ===
-num_steps = 100  # số time slot mô phỏng mỗi case (hoặc 1000 tuỳ máy)
-# ue_list = [20, 40, 60, 80, 100, 120, 140, 160, 180, 200]  # số UE giống paper
-ue_list = [20, 40, 60]  # số UE giống paper
+num_steps = 1000  # số time slot mô phỏng mỗi case (hoặc 1000 tuỳ máy)
+ue_list = [20, 40, 60, 80, 100, 120, 140]  # số UE giống paper
+# ue_list = [20, 40, 60, 80, 100]  # số UE giống paper
 
+SEED = 42  # seed để tái lập kết quả
 
 # Các list lưu average power với từng số lượng UE
 greedy_results = []
@@ -28,7 +29,7 @@ for num_ue in ue_list:  # số UAV cố định
 
     # === Greedy Offload ===
     print("Bắt đầu Greedy Offload...")
-    env.reset()
+    env.reset(seed=SEED)
     for _ in range(num_steps):
         actions = env.greedy_offloading()
         _, reward, terminated, _, info = env.step(actions)
@@ -38,7 +39,7 @@ for num_ue in ue_list:  # số UAV cố định
 
     # === Random Offload ===
     print("Bắt đầu Random Offload...")
-    env.reset()
+    env.reset(seed=SEED)
     for _ in range(num_steps):
         actions = env.random_offloading()
         _, reward, terminated, _, info = env.step(actions)
@@ -48,7 +49,7 @@ for num_ue in ue_list:  # số UAV cố định
 
     # # === Local Execute ===
     print("Bắt đầu Local Execution...")
-    env.reset()
+    env.reset(seed=SEED)
     for _ in range(num_steps):
         actions = env.local_execution()
         _, reward, terminated, _, info = env.step(actions)
@@ -58,11 +59,15 @@ for num_ue in ue_list:  # số UAV cố định
 
     print("Bắt đầu MARL...")
     marl = MARL(num_ues=num_ue, num_uavs=10, num_episodes=25000)
-    average_energy_marl = marl.run(num_steps=num_steps)
+    marl.env.reset(seed=SEED)
+    marl.load_model("marl/model/marl_model_ver_ue.pth")
+    average_energy_marl = marl.test(num_steps=num_steps)
 
     print("Bắt đầu MAFRL...")
     mafrl = MAFRL(num_ues=num_ue, num_uavs=10, num_episodes=25000)
-    average_energy_mafrl = mafrl.run()
+    mafrl.env.reset(seed=SEED)
+    mafrl.load_model("mafrl/model/mafrl_model_ver_ue.pth")
+    average_energy_mafrl = mafrl.test(num_steps=num_steps)
 
     # Lưu trung bình power từng baseline
     greedy_results.append(np.mean(greedy_power))

@@ -162,7 +162,7 @@ class MARL:
             self.target_net.load_state_dict(self.target_net_state_dict)
             if episode % 100 == 0:
                 print(
-                    f"Episode {episode}, Total Energy: {info['total_energy_consumption']:.2f} J"
+                    f"Episode {episode}, Total Energy: {info['total_energy_consumption']:.3f} J"
                 )
         print("Training completed.")
 
@@ -187,4 +187,54 @@ class MARL:
             total_energy.append(info["total_energy_consumption"])
 
             states = next_states
+        print(f"Average Energy Consumption: {np.mean(total_energy):.3f} J")
         return np.mean(total_energy)
+
+    def save_model(self, model_path):
+        if not os.path.exists(os.path.dirname(model_path)):
+            os.makedirs(os.path.dirname(model_path))
+        torch.save(self.policy_net.state_dict(), model_path)
+        print(f"Model saved to {model_path}")
+
+    def load_model(self, model_path):
+        if os.path.exists(model_path):
+            self.policy_net.load_state_dict(torch.load(model_path, map_location=device))
+            self.target_net.load_state_dict(self.policy_net.state_dict())
+            print(f"Model loaded from {model_path}")
+        else:
+            print(f"Model file {model_path} does not exist.")
+        self.policy_net.eval()
+
+    def test(self, num_steps=1000):
+        print("Testing started...")
+        states = []
+        for ue_id in range(self.env.num_ues):
+            state = torch.tensor(
+                self.env.get_state_ue(ue_id), device=device, dtype=torch.float32
+            ).unsqueeze(0)
+            states.append(state)
+
+        total_energy = []
+        for step in range(num_steps):
+            actions = []
+            for ue_id in range(self.env.num_ues):
+                state = states[ue_id]
+                action = self.select_action(state, eval_mode=True)
+                actions.append(action)
+
+            _, reward, terminated, truncated, info = self.env.step(actions)
+
+            next_states = []
+            for ue_id in range(self.env.num_ues):
+                next_state = torch.tensor(
+                    self.env.get_state_ue(ue_id), device=device, dtype=torch.float32
+                ).unsqueeze(0)
+                next_states.append(next_state)
+
+            total_energy.append(info["total_energy_consumption"])
+
+            states = next_states
+
+        average_energy = np.mean(total_energy)
+        print(f"Average Energy Consumption: {average_energy:.3f} J")
+        return average_energy

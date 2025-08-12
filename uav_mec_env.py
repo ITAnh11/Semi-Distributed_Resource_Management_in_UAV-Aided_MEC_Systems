@@ -3,6 +3,7 @@ from gymnasium import spaces
 import numpy as np
 from parameters import *
 from channel_model_3gpp import caculate_offloading_rate
+import random
 
 
 class UAVMECEnv(gym.Env):
@@ -101,6 +102,12 @@ class UAVMECEnv(gym.Env):
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
+
+        if seed is not None:
+            np.random.seed(seed)  # numpy
+            random.seed(seed)  # random
+            # torch.manual_seed(seed) # nếu có dùng torch trong env
+
         self.ue_positions = np.random.uniform(0, AREA_SIZE, (self.num_ues, 2))
         self._init_uav_positions()
         self.task_data_size.fill(0.0)
