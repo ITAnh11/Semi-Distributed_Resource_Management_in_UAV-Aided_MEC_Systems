@@ -185,7 +185,7 @@ class MAFRL:
         ]
         self.server = Server(self.n_observations, self.n_actions)
 
-        self.aggregation_interval = 300
+        self.aggregation_interval = 50
         self.target_update_interval = 1
 
     def train_and_update(self, ue_agent):
@@ -212,7 +212,7 @@ class MAFRL:
             _, reward, terminateds, _, infos = self.env.step(actions)
             if episode % 10 == 0:
                 print(
-                    f"Episode {episode + 1}/{self.num_episodes} - Total Energy: {infos['total_energy_consumption']:.3f}"
+                    f"Episode {episode}/{self.num_episodes} - Total Energy: {infos['total_energy_consumption']:.3f}"
                 )
 
             next_states = []
@@ -236,7 +236,7 @@ class MAFRL:
                 )
             states = next_states
 
-            if episode % self.target_update_interval == 0:
+            if (episode + 1) % self.target_update_interval == 0:
                 for ue_agent in self.ue_agents:
                     ue_agent.optimize_model()
                     ue_agent.soft_update_target()

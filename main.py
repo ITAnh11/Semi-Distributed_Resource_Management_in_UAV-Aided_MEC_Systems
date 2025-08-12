@@ -6,11 +6,11 @@ from marl.marl import MARL
 from mafrl.mafrl import MAFRL
 
 # === Thông số mô phỏng ===
-num_steps = 1000  # số time slot mô phỏng mỗi case (hoặc 1000 tuỳ máy)
-ue_list = [20, 40, 60, 80, 100, 120, 140]  # số UE giống paper
+num_steps = 200  # số time slot mô phỏng mỗi case (hoặc 1000 tuỳ máy)
+ue_list = [20, 40, 60, 80, 100, 120, 140, 160, 180, 200]  # số UE giống paper
 # ue_list = [20, 40, 60, 80, 100]  # số UE giống paper
 
-SEED = 42  # seed để tái lập kết quả
+SEED = 33  # seed để tái lập kết quả
 
 # Các list lưu average power với từng số lượng UE
 greedy_results = []
